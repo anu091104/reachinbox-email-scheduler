@@ -1,0 +1,79 @@
+# Whole stack on one machine: Postgres + Redis + Elasticsearch + API/worker + web (Caddy).
+#   cp deploy/production.env.example .env.production   (then edit it)
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+name: reachinbox-scheduler
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *restart
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: reachinbox
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: reachinbox
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ['CMD-SHELL', 'pg_isready -U reachinbox'], interval: 5s, retries: 20 }
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec', '--maxmemory-policy', 'noeviction']
+    volumes: [redisdata:/data]
+    healthcheck: { test: ['CMD', 'redis-cli', 'ping'], interval: 5s, retries: 20 }
+
+  elasticsearch:
+    <<: *restart
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes: [esdata:/usr/share/elasticsearch/data]
+    healthcheck: { test: ['CMD-SHELL', 'curl -fs http://localhost:9200/_cluster/health || exit 1'], interval: 10s, retries: 30 }
+
+  backend:
+    <<: *restart
+    build: ./backend
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+    environment:
+      NODE_ENV: production
+      PROCESS_ROLE: all
+      PORT: 4000
+      DATABASE_URL: postgres://reachinbox:${POSTGRES_PASSWORD}@postgres:5432/reachinbox
+      REDIS_URL: redis://redis:6379
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      JWT_SECRET: ${JWT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      FRONTEND_ORIGIN: https://${SITE_ADDRESS}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      TRUST_PROXY: 'true'
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      MIN_DELAY_BETWEEN_EMAILS_MS: ${MIN_DELAY_BETWEEN_EMAILS_MS:-2000}
+      SEND_GAP_SCOPE: ${SEND_GAP_SCOPE:-sender}
+      MAX_EMAILS_PER_HOUR: ${MAX_EMAILS_PER_HOUR:-200}
+      MAX_EMAILS_PER_HOUR_PER_SENDER: ${MAX_EMAILS_PER_HOUR_PER_SENDER:-50}
+      AUTO_PROVISION_SENDERS: ${AUTO_PROVISION_SENDERS:-3}
+      BULL_BOARD_USER: ${BULL_BOARD_USER:-admin}
+      BULL_BOARD_PASSWORD: ${BULL_BOARD_PASSWORD}
+    stop_grace_period: 30s
+
+  web:
+    <<: *restart
+    build: ./frontend
+    depends_on: [backend]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS}
+    ports: ['80:80', '443:443']
+    volumes: [caddydata:/data]
+
+volumes:
+  pgdata:
+  redisdata:
+  esdata:
+  caddydata:

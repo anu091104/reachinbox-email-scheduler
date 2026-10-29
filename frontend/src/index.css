@@ -1,0 +1,66 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --color-brand-50: #ecf8f1;
+  --color-brand-100: #d3f0df;
+  --color-brand-500: #23a55a;
+  --color-brand-600: #1f9d55;
+  --color-brand-700: #17804a;
+  --color-ink: #1c1c1e;
+  --color-muted: #6b6f76;
+  --color-line: #ececec;
+  --color-surface: #f7f7f8;
+  --color-amber-tag: #fff2e5;
+  --color-amber-ink: #d9711c;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-white font-sans text-ink antialiased;
+}
+
+/* Rich-text editor content */
+.tiptap {
+  @apply min-h-[260px] outline-none text-sm leading-6;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  @apply pointer-events-none float-left h-0 text-muted/70;
+}
+.prose-email ul,
+.tiptap ul {
+  @apply list-disc pl-6;
+}
+.prose-email ol,
+.tiptap ol {
+  @apply list-decimal pl-6;
+}
+.prose-email blockquote,
+.tiptap blockquote {
+  @apply border-l-4 border-brand-100 pl-3 text-muted;
+}
+.prose-email pre,
+.tiptap pre {
+  @apply rounded-md bg-surface p-3 font-mono text-xs;
+}
+.prose-email h1,
+.tiptap h1 {
+  @apply text-xl font-semibold;
+}
+.prose-email h2,
+.tiptap h2 {
+  @apply text-lg font-semibold;
+}
+.prose-email a,
+.tiptap a {
+  @apply text-brand-600 underline;
+}
+.prose-email p {
+  @apply mb-2;
+}

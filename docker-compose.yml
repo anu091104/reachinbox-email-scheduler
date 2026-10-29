@@ -1,0 +1,48 @@
+# Local infrastructure: PostgreSQL + Redis + Elasticsearch.
+# Start:  docker compose up -d        Stop: docker compose down   (add -v to also wipe data)
+name: reachinbox-scheduler
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: reachinbox
+      POSTGRES_PASSWORD: reachinbox
+      POSTGRES_DB: reachinbox
+    ports: ['5432:5432']
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U reachinbox']
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # appendonly: every write is logged to disk, so delayed jobs survive a Redis restart.
+    # noeviction: Redis must never silently drop queue data when memory is tight (BullMQ requirement).
+    command: ['redis-server', '--appendonly', 'yes', '--appendfsync', 'everysec', '--maxmemory-policy', 'noeviction']
+    ports: ['6379:6379']
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    ports: ['9200:9200']
+    volumes: [esdata:/usr/share/elasticsearch/data]
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fs http://localhost:9200/_cluster/health || exit 1']
+      interval: 10s
+      retries: 20
+
+volumes:
+  pgdata:
+  redisdata:
+  esdata:
