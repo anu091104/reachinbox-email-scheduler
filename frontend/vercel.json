@@ -1,7 +1,7 @@
-   {
-     "$schema": "https://openapi.vercel.sh/vercel.json",
-     "rewrites": [
-       { "source": "/api/:path*", "destination": "https://reachinbox-email-scheduler.onrender.com/api/:path*" },
-       { "source": "/((?!assets/).*)", "destination": "/index.html" }
-     ]
-   }
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "https://reachinbox-email-scheduler-v125.onrender.com/api/:path*" },
+    { "source": "/((?!assets/).*)", "destination": "/index.html" }
+  ]
+}
