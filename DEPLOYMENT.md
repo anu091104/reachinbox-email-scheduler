@@ -88,6 +88,93 @@ docker compose -f docker-compose.prod.yml logs backend | grep -E "reconciliation
 
 ---
 
+## Free option: Vercel + Render + Neon + Redis Cloud + Elastic Cloud
+
+Everything below is free and needs no card. It has more moving parts than the VM, and two workarounds:
+
+- **Render's free tier blocks SMTP port 587.** The backend sends through port **2525** instead (`SMTP_PORT_OVERRIDE=2525`). Check Ethereal accepts it first (step 0).
+- **Render's free tier sleeps after 15 minutes without traffic.** A free uptime monitor pings `/health` every 5 minutes to keep the worker awake. This is a keep-alive, not a scheduler: emails are still timed by BullMQ delayed jobs.
+
+| Piece | Service (free) |
+|---|---|
+| Frontend | Vercel |
+| API + BullMQ worker | Render web service (free instance) |
+| PostgreSQL | Neon |
+| Redis | Redis Cloud (30 MB free database) |
+| Elasticsearch | Elastic Cloud (14-day trial; search falls back to Postgres afterwards) |
+| Keep-alive | UptimeRobot |
+
+### 0. Check Ethereal on port 2525 (from your laptop)
+```powershell
+Test-NetConnection smtp.ethereal.email -Port 2525
+```
+`TcpTestSucceeded : True` means this route works. If it's `False`, emails can't leave Render's free tier; use the VM route above instead.
+
+### 1. Neon (Postgres)
+1. Sign up at https://neon.tech with GitHub → **Create project** `reachinbox`, region **AWS Asia Pacific (Singapore)**.
+2. **Connect** → turn **Connection pooling off** → copy the connection string (`postgresql://…neon.tech/neondb?sslmode=require`).
+
+### 2. Redis Cloud
+1. Sign up at https://redis.io/try-free → create a **Free** (30 MB) database, region close to Singapore or Mumbai.
+2. Open the database → **Configuration → Edit → Data eviction policy: `noeviction`** → Save (BullMQ needs this).
+3. Copy the public endpoint and the default user's password, and build:
+   `redis://default:<password>@<public-endpoint-host>:<port>`
+
+### 3. Elastic Cloud
+1. Start the free trial at https://cloud.elastic.co → create a **hosted** deployment (any region in Asia).
+2. Copy the **Elasticsearch endpoint** (`https://….es.….cloud.es.io`).
+3. **Management → API keys → Create API key** → copy the **encoded** key.
+
+### 4. Render (backend)
+1. https://render.com → sign up with GitHub → **New → Web Service** → pick your repo.
+2. Settings:
+
+| Field | Value |
+|---|---|
+| Root Directory | `backend` |
+| Runtime | **Node** |
+| Region | **Singapore** |
+| Build Command | `npm ci --include=dev && npm run build` |
+| Start Command | `node dist/index.js` |
+| Instance Type | **Free** |
+| Health Check Path (Advanced) | `/health` |
+
+3. **Environment variables:**
+```
+NODE_ENV=production
+DATABASE_URL=<Neon connection string>
+DATABASE_SSL=true
+REDIS_URL=<Redis Cloud URL>
+ELASTICSEARCH_URL=<Elastic endpoint>
+ELASTICSEARCH_API_KEY=<encoded API key>
+JWT_SECRET=<64+ random characters>
+GOOGLE_CLIENT_ID=<your Google client ID>
+FRONTEND_ORIGIN=https://<your-app>.vercel.app
+COOKIE_SECURE=true
+TRUST_PROXY=true
+SMTP_PORT_OVERRIDE=2525
+BULL_BOARD_PASSWORD=<a strong password>
+```
+4. **Create Web Service**. When the log shows `API listening`, copy the URL (`https://<name>.onrender.com`) and open `/health`: it should say `"status":"ok"`.
+
+### 5. Vercel (frontend)
+1. In `frontend/vercel.json`, replace `YOUR-BACKEND-DOMAIN` with your Render host (`<name>.onrender.com`), then commit and push.
+2. https://vercel.com → sign up with GitHub → **Add New → Project** → import the repo → **Root Directory: `frontend`** (Vite is detected) → **Deploy**.
+3. Copy the Vercel URL and set it as `FRONTEND_ORIGIN` on Render (Render redeploys).
+
+The rewrite in `vercel.json` sends `/api/*` to Render, so the browser only ever talks to the Vercel domain and the session cookie stays first-party.
+
+### 6. Google login
+Google Cloud → **Clients** → your client → **Authorized JavaScript origins** → add `https://<your-app>.vercel.app`.
+
+### 7. Keep the worker awake
+https://uptimerobot.com → **New monitor** → HTTP(s) → URL `https://<name>.onrender.com/health` → interval **5 minutes**.
+
+### 8. Test
+Open the Vercel URL → sign in → Compose → send. The queue dashboard is at `https://<name>.onrender.com/admin/queues`. To show a restart, use **Manual Deploy → Restart service** on Render.
+
+---
+
 ## Alternative: split hosting (paid tiers)
 
 If you'd rather use managed services:

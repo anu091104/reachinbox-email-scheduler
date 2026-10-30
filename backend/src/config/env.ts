@@ -52,6 +52,12 @@ const schema = z.object({
   SMTP_PORT: z.coerce.number().int().default(587),
   SMTP_SECURE: bool.default('false'),
   AUTO_PROVISION_SENDERS: z.coerce.number().int().min(0).max(10).default(3),
+  /** Force every sender onto this SMTP port (e.g. 2525 on hosts that block 587). Empty = use each sender's own port. */
+  SMTP_PORT_OVERRIDE: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() ? Number(v) : undefined))
+    .pipe(z.number().int().positive().optional()),
 
   // --- Bull Board ----------------------------------------------------------
   BULL_BOARD_USER: z.string().default('admin'),

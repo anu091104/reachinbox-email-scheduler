@@ -4,11 +4,13 @@ A full-stack email scheduling service: an Express + TypeScript API, a BullMQ wor
 
 Emails are scheduled as **BullMQ delayed jobs** (no cron), sent from **multiple senders** under **Redis-backed rate limits**, and keep their schedule through **server restarts** with no duplicate sends.
 
+**Demo video (under 5 min):** _add link here_ · **Live deployment:** _add link here_
+
 ---
 
 ## Contents
 
-1. [Features](#features)
+1. [Features implemented](#features-implemented)
 2. [Architecture](#architecture)
 3. [How scheduling works](#how-scheduling-works)
 4. [Persistence across restarts](#persistence-across-restarts)
@@ -20,36 +22,40 @@ Emails are scheduled as **BullMQ delayed jobs** (no cron), sent from **multiple 
 10. [Testing](#testing)
 11. [Deployment](#deployment)
 12. [Project structure](#project-structure)
-13. [Trade-offs and next steps](#trade-offs-and-next-steps)
+13. [Assumptions, shortcuts and trade-offs](#assumptions-shortcuts-and-trade-offs)
 
 ---
 
-## Features
+## Features implemented
 
-**Backend**
-- Schedule emails through `POST /api/campaigns`: a single request fans out into one delayed job per recipient
-- PostgreSQL stores every campaign, email and attachment; Redis stores the timers
-- BullMQ delayed jobs only: no cron, no polling loop
-- Multiple sender mailboxes (Ethereal accounts), created automatically on first boot
-- Configurable worker concurrency
-- Minimum gap between sends, handed out as reserved time slots so send order is preserved
-- Hourly caps that hold across multiple workers and machines: global, per sender, and per campaign (the Compose form's "Hourly Limit"). An email over the cap is moved to the next hour, never dropped.
-- Survives restarts and crashes: delayed jobs live in Redis, a boot-time reconciler re-creates any missing jobs, and a Postgres lease prevents double sends
-- Retries with exponential backoff for temporary SMTP errors; permanent 5xx errors fail immediately
-- Cancel a scheduled email
-- Elasticsearch full-text search with fuzzy matching and highlighting, with a Postgres fallback if ES is down
-- Live BullMQ dashboard (Bull Board) at `/admin/queues`, behind basic auth
-- Google sign-in plus email/password accounts, with httpOnly JWT session cookies
-- Graceful shutdown: in-flight sends finish before the process exits
-- `/health` endpoint, structured logging (pino), validated env config (zod)
+### Backend
 
-**Frontend** (React 19 + TypeScript + Tailwind v4, following the Figma)
-- Login screen: Google button plus email/password
-- Sidebar with user card (logout), Compose button, and Scheduled / Sent counts
-- Scheduled and Sent lists with status badges, stars, filter, refresh, pagination, loading skeletons and empty states; the lists refresh automatically every 5 seconds
-- Search bar backed by Elasticsearch
-- Email detail view: status banner, Ethereal preview link, attachments, delivery metadata
-- Compose: sender picker, recipient chips, CSV/TXT lead upload (emails are detected and counted), subject, delay between emails, hourly limit, rich-text editor, attachments, and a "Send Later" picker with presets
+| Area | What's implemented | Where |
+|---|---|---|
+| **Scheduler** | `POST /api/campaigns` turns one Compose submission into one BullMQ **delayed job** per recipient (`delay = scheduledAt − now`, `jobId = emailId`). No cron, no polling. Email *i* is due at `startAt + i × delayBetweenSeconds`. Cancel a scheduled email (`DELETE /api/emails/:id`). | `services/campaigns.ts`, `queue/email-queue.ts` |
+| **Sending** | Nodemailer over Ethereal SMTP from **multiple senders** (3 Ethereal accounts created on first boot, more via `npm run senders:create`). Pooled connection per sender. Ethereal preview URL stored per email. Attachments supported. | `services/mailer.ts` |
+| **Persistence on restart** | Delayed jobs live in Redis (AOF on, `noeviction`). Postgres is the source of truth. At boot the worker re-enqueues every `scheduled` email (idempotent because `jobId = emailId`) and resets expired leases. Stalled jobs are picked up by another worker. | `queue/send-worker.ts` → `reconcileOnBoot`, `services/email-repository.ts` |
+| **No duplicates** | Atomic claim `UPDATE … WHERE status='scheduled'` plus a time-limited lease (`locked_until`). An email is only ever sent by one worker, and never re-sent once `sent`. | `services/email-repository.ts` → `claimEmail` |
+| **Rate limiting** | One Redis Lua script enforces: minimum gap between sends (`MIN_DELAY_BETWEEN_EMAILS_MS`, per sender or global), hourly caps (global `MAX_EMAILS_PER_HOUR`, per sender `MAX_EMAILS_PER_HOUR_PER_SENDER`, per campaign from Compose). Over-limit emails are **rescheduled into the next hour in arrival order**, never dropped. | `queue/throttle.ts` |
+| **Concurrency** | `WORKER_CONCURRENCY` jobs in parallel per worker, any number of worker processes (`npm run dev:worker`). Safe because all shared state is in Postgres (row claim) or Redis (atomic Lua); no in-memory counters. | `queue/send-worker.ts` |
+| **Retries** | Exponential backoff for temporary SMTP errors; permanent 5xx errors fail immediately; attempts and last error stored. | `queue/send-worker.ts` |
+| **Search** | Every email indexed in **Elasticsearch** (fuzzy, highlighted, status-filtered). Falls back to Postgres if ES is down; `npm run search:reindex` rebuilds the index. | `services/search.ts` |
+| **Queue dashboard** | Live **Bull Board** at `/admin/queues`, behind basic auth. | `app.ts` |
+| **Auth & security** | Google sign-in (token verified server-side against `GOOGLE_CLIENT_ID`) plus email/password (bcrypt). httpOnly JWT session cookie, sanitised email HTML, helmet, login rate limit, per-user data isolation. | `routes/auth.ts`, `middleware/auth.ts` |
+| **Operations** | Validated env config (zod), structured logs (pino), `/health`, graceful shutdown (in-flight sends finish), migrations on boot, Dockerfile. | `config/env.ts`, `bootstrap.ts` |
+
+### Frontend (React 19 + TypeScript + Tailwind v4, built from the Figma)
+
+| Area | What's implemented |
+|---|---|
+| **Login** | Google login button plus email/password sign-in and sign-up; session persists across reloads; protected routes. |
+| **Dashboard** | Sidebar with user card (name, email, avatar, logout), Compose button, Scheduled and Sent counts. |
+| **Compose** | Sender picker, recipient chips (type, paste, or **Upload List** from CSV/TXT, with the email count shown), subject, **Delay between 2 emails**, **Hourly Limit**, rich-text editor, attachments, **Send Later** picker with presets. |
+| **Scheduled table** | Recipient, subject, snippet, scheduled time badge, "rate-limited" tag when moved by a limit, star, pagination. |
+| **Sent table** | Recipient, subject, sent time, status (Sent / Failed). |
+| **Email detail** | Status banner, Ethereal preview link, attachments, attempts, campaign settings, cancel button for scheduled emails. |
+| **Search, filter, refresh** | Elasticsearch-backed search bar, starred filter, refresh; lists update automatically every 5 seconds. |
+| **States** | Loading skeletons, empty states, error messages, toast notifications. |
 
 ---
 
@@ -249,6 +255,7 @@ All backend settings are in `backend/.env` and are validated at startup in `src/
 | `JOB_BACKOFF_MS` | `30000` | Base of the exponential retry backoff |
 | `SEND_LEASE_MS` | `60000` | How long a worker owns an email while sending |
 | `AUTO_PROVISION_SENDERS` | `3` | Ethereal accounts to create when none exist |
+| `SMTP_PORT_OVERRIDE` | — | Send through this port for every sender (e.g. `2525` on hosts that block 587) |
 | `BULL_BOARD_USER` / `BULL_BOARD_PASSWORD` | `admin` / — | Queue dashboard login |
 
 ### Google sign-in
@@ -353,9 +360,26 @@ The guide also explains why platforms like Railway (Hobby plan) and Render's fre
 
 ---
 
-## Trade-offs and next steps
+## Assumptions, shortcuts and trade-offs
 
-- **Fixed hourly windows** are simple and cheap, but they allow a burst at the boundary (up to 2× the cap within a few minutes either side of the hour). A sliding-window log in a Redis sorted set would smooth this out.
-- **Attachments live in Postgres**. That's fine for 5 MB files and keeps the workers stateless; at scale I'd move them to object storage (S3) and keep only references.
-- **Personalisation** (`{{first_name}}` from extra CSV columns) would be a natural next feature: the lead parser already reads full rows.
-- **Observability:** add Prometheus metrics (queue depth, send latency, deferrals) next to the Bull Board.
+**Assumptions**
+- **Senders are a shared pool.** Every signed-in user can send from any configured Ethereal sender, like an organisation's connected mailboxes. Per-user sender ownership would be a small schema change.
+- **"Delay between 2 emails" spaces the due times** (`startAt + i × delay`). The minimum send gap (2 s) is a separate, system-wide safety rule enforced by the worker.
+- **Hourly limits use fixed UTC clock hours** (10:00–10:59, 11:00–11:59, …).
+- **Hourly Limit = 0** in Compose means no campaign-specific limit; the global and per-sender limits still apply.
+- **Overdue emails are sent on recovery.** If the server was down when an email was due, it goes out as soon as the server is back (still throttled), rather than being skipped.
+- **Email/password login was added beside Google**, because the Figma login screen shows both.
+
+**Shortcuts**
+- Attachments are stored in Postgres (`bytea`, 5 files × 5 MB) so workers stay stateless; at scale they would move to object storage (S3).
+- The worker and API run in one process by default (`npm run dev`); separate processes are supported (`dev:api`, `dev:worker`) but not required.
+- Google OAuth runs in "Testing" mode, so only listed test users can sign in with Google.
+- Personalisation tokens (`{{first_name}}`) are not implemented, although the CSV parser already reads full rows.
+
+**Trade-offs**
+- **At-least-once delivery.** A crash after SMTP accepted an email but before Postgres recorded `sent` can cause one duplicate. A deterministic `Message-ID` lets receivers detect it; removing the window entirely needs provider-side idempotency.
+- **Fixed windows can burst at the boundary** (up to 2× the cap within a few minutes either side of the hour). A sliding-window log in a Redis sorted set would smooth this, at more Redis cost.
+- **Elasticsearch is a secondary index.** Writes to it are best-effort and never block sending; Postgres stays the source of truth, and the index can be rebuilt.
+- **Deployment on a VM, not a free PaaS.** Railway (Hobby) and Render (free tier) block outbound SMTP ports and sleep idle services, which would break Ethereal and delay jobs. See `DEPLOYMENT.md`.
+
+**Next steps:** sliding-window limiter, personalisation from CSV columns, per-tenant limits, Prometheus metrics (queue depth, send latency, deferrals).

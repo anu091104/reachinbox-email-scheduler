@@ -18,10 +18,12 @@ const transports = new Map<string, Transporter>();
 function transportFor(sender: Sender): Transporter {
   let t = transports.get(sender.id);
   if (!t) {
+    const port = env.SMTP_PORT_OVERRIDE ?? sender.smtpPort;
     t = nodemailer.createTransport({
       host: sender.smtpHost,
-      port: sender.smtpPort,
-      secure: sender.smtpSecure,
+      port,
+      // 465 is implicit TLS; every other port upgrades with STARTTLS
+      secure: env.SMTP_PORT_OVERRIDE ? port === 465 : sender.smtpSecure,
       auth: { user: sender.smtpUser, pass: sender.smtpPass },
       pool: true,
       maxConnections: 2,
