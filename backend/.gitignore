@@ -1,4 +1,7 @@
 node_modules
 dist
+# every env file holds secrets except the template
 .env
+.env.*
+!.env.example
 *.log

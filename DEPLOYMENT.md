@@ -170,6 +170,17 @@ Google Cloud → **Clients** → your client → **Authorized JavaScript origins
 ### 7. Keep the worker awake
 https://uptimerobot.com → **New monitor** → HTTP(s) → URL `https://<name>.onrender.com/health` → interval **5 minutes**.
 
+### If emails time out on Render ("Last attempt failed (Timeout)")
+Render can block port 2525 too. Then split the roles:
+1. On Render, add `PROCESS_ROLE=api` (Render now only serves the API).
+2. On a machine with SMTP access (your laptop works), create `backend/.env.cloud` with the same values as Render, but without `SMTP_PORT_OVERRIDE` and with `AUTO_PROVISION_SENDERS=0`. It is git-ignored.
+3. Start the worker against the cloud services:
+   ```powershell
+   cd backend
+   $env:DOTENV_CONFIG_PATH=".env.cloud"; npm run dev:worker
+   ```
+   Emails scheduled on the live site are sent by this worker while it runs; anything due while it's off is sent as soon as it starts (boot reconciliation).
+
 ### 8. Test
 Open the Vercel URL → sign in → Compose → send. The queue dashboard is at `https://<name>.onrender.com/admin/queues`. To show a restart, use **Manual Deploy → Restart service** on Render.
 

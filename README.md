@@ -4,7 +4,9 @@ A full-stack email scheduling service: an Express + TypeScript API, a BullMQ wor
 
 Emails are scheduled as **BullMQ delayed jobs** (no cron), sent from **multiple senders** under **Redis-backed rate limits**, and keep their schedule through **server restarts** with no duplicate sends.
 
-**Demo video (under 5 min):** _add link here_ · **Live deployment:** _add link here_
+**Live app:** https://reachinbox-email-scheduler-lake-nine.vercel.app · **API health:** https://reachinbox-email-scheduler-v125.onrender.com/health · **Queue dashboard:** https://reachinbox-email-scheduler-v125.onrender.com/admin/queues (credentials shared on request)
+
+**Demo video (under 5 min):** _add link here_
 
 ---
 
@@ -322,9 +324,22 @@ The rate-limiter tests run against a real Redis. They check slot spacing, per-se
 
 ## Deployment
 
-See **[DEPLOYMENT.md](DEPLOYMENT.md)**. In short, the whole stack runs on one Linux VM with `docker-compose.prod.yml`, and Caddy provides automatic HTTPS.
+The live deployment uses only free tiers:
 
-The guide also explains why platforms like Railway (Hobby plan) and Render's free tier are not used: they block outbound SMTP ports, so Ethereal could not be reached.
+| Piece | Where |
+|---|---|
+| Frontend (React) | Vercel: `/api/*` is rewritten to the backend, so the session cookie stays first-party |
+| API (Express) | Render web service, `PROCESS_ROLE=api` |
+| BullMQ worker | Separate process (`npm run dev:worker`) on a machine with outbound SMTP |
+| PostgreSQL | Neon |
+| Redis | Redis Cloud |
+| Elasticsearch | Elastic Cloud |
+
+**Why the worker runs separately:** Render's free tier blocks outbound SMTP ports (25, 465, 587, and in practice 2525), so Ethereal can't be reached from it. Because API and workers coordinate only through Redis and Postgres, the worker can run anywhere with SMTP access; this is also how workers are scaled independently of the API. On a host that allows SMTP (any VM, or a paid Render instance), set `PROCESS_ROLE=all` and the single service does both.
+
+**Google sign-in:** the OAuth app is in Testing mode, so only listed test users can use Google login. Reviewers can sign up with email and password, or share a Gmail address to be added as a test user.
+
+Step-by-step guides for both the free setup and a single-VM Docker setup are in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 ---
 
@@ -380,6 +395,6 @@ The guide also explains why platforms like Railway (Hobby plan) and Render's fre
 - **At-least-once delivery.** A crash after SMTP accepted an email but before Postgres recorded `sent` can cause one duplicate. A deterministic `Message-ID` lets receivers detect it; removing the window entirely needs provider-side idempotency.
 - **Fixed windows can burst at the boundary** (up to 2× the cap within a few minutes either side of the hour). A sliding-window log in a Redis sorted set would smooth this, at more Redis cost.
 - **Elasticsearch is a secondary index.** Writes to it are best-effort and never block sending; Postgres stays the source of truth, and the index can be rebuilt.
-- **Deployment on a VM, not a free PaaS.** Railway (Hobby) and Render (free tier) block outbound SMTP ports and sleep idle services, which would break Ethereal and delay jobs. See `DEPLOYMENT.md`.
+- **Free-tier deployment splits API and worker.** Render's free tier blocks outbound SMTP and sleeps when idle, so the API runs there (`PROCESS_ROLE=api`) and the worker runs as a separate process with SMTP access. A single VM running `docker-compose.prod.yml` avoids the split. See `DEPLOYMENT.md`.
 
 **Next steps:** sliding-window limiter, personalisation from CSV columns, per-tenant limits, Prometheus metrics (queue depth, send latency, deferrals).
